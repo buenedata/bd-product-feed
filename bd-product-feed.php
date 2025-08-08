@@ -59,6 +59,7 @@ require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-currency-converter.php';
 require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-product-filter.php';
 require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-cron-manager.php';
 require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-feed-validator.php';
+require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-multilingual.php';
 require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-admin-interface.php';
 
 /**
@@ -107,6 +108,11 @@ class BD_Product_Feed {
     public $feed_validator;
     
     /**
+     * Multilingual support
+     */
+    public $multilingual;
+    
+    /**
      * Get plugin instance
      */
     public static function get_instance() {
@@ -134,6 +140,7 @@ class BD_Product_Feed {
         $this->product_filter = new BD_Product_Filter();
         $this->cron_manager = new BD_Cron_Manager();
         $this->feed_validator = new BD_Feed_Validator();
+        $this->multilingual = new BD_Multilingual();
         
         // Initialize admin interface
         if (is_admin()) {
@@ -270,6 +277,8 @@ class BD_Product_Feed {
             'feed_description' => __('Produktfeed for Google Merchant Center', 'bd-product-feed'),
             'email_notifications' => true,
             'notification_email' => get_option('admin_email'),
+            'multilingual_enabled' => false,
+            'target_languages' => array(),
         );
         
         foreach ($default_options as $key => $value) {

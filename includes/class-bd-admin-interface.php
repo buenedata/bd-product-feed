@@ -36,6 +36,11 @@ class BD_Admin_Interface {
     private $feed_validator;
     
     /**
+     * Multilingual instance
+     */
+    private $multilingual;
+    
+    /**
      * Constructor
      */
     public function __construct() {
@@ -44,6 +49,7 @@ class BD_Admin_Interface {
         $this->currency_converter = new BD_Currency_Converter();
         $this->cron_manager = new BD_Cron_Manager();
         $this->feed_validator = new BD_Feed_Validator();
+        $this->multilingual = new BD_Multilingual();
         
         // Hook into WordPress admin
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
@@ -114,6 +120,11 @@ class BD_Admin_Interface {
         if (isset($_POST['bd_test_feed']) && wp_verify_nonce($_POST['bd_nonce'], 'bd_product_feed_test')) {
             $this->test_feed_manual();
         }
+        
+        // Handle multilingual feed generation
+        if (isset($_POST['bd_generate_multilingual_feeds']) && wp_verify_nonce($_POST['bd_nonce'], 'bd_product_feed_generate')) {
+            $this->generate_multilingual_feeds_manual();
+        }
     }
     
     /**
@@ -132,10 +143,16 @@ class BD_Admin_Interface {
             'feed_description' => sanitize_textarea_field($_POST['feed_description']),
             'email_notifications' => isset($_POST['email_notifications']),
             'notification_email' => sanitize_email($_POST['notification_email']),
+            'multilingual_enabled' => isset($_POST['multilingual_enabled']),
+            'target_languages' => isset($_POST['target_languages']) ? array_map('sanitize_text_field', $_POST['target_languages']) : array(),
         );
         
         // Validate settings
         $validation_errors = $this->product_filter->validate_filter_options($settings);
+        
+        // Validate multilingual settings
+        $multilingual_errors = $this->multilingual->validate_language_settings($settings);
+        $validation_errors = array_merge($validation_errors, $multilingual_errors);
         
         if (!empty($validation_errors)) {
             add_settings_error('bd_product_feed', 'validation_error', implode('<br>', $validation_errors));
@@ -176,6 +193,41 @@ class BD_Admin_Interface {
             add_settings_error('bd_product_feed', 'feed_tested', $result['message'], 'updated');
         } else {
             add_settings_error('bd_product_feed', 'feed_test_error', $result['message']);
+        }
+    }
+    
+    /**
+     * Generate multilingual feeds manually
+     */
+    private function generate_multilingual_feeds_manual() {
+        $options = $this->core->get_options();
+        
+        if (!$options['multilingual_enabled'] || empty($options['target_languages'])) {
+            add_settings_error('bd_product_feed', 'multilingual_not_configured', __('Flerspråklig støtte er ikke konfigurert', 'bd-product-feed'));
+            return;
+        }
+        
+        $results = $this->multilingual->generate_multilingual_feeds($options);
+        $success_count = 0;
+        $error_count = 0;
+        
+        foreach ($results as $locale => $result) {
+            if ($result['success']) {
+                $success_count++;
+            } else {
+                $error_count++;
+            }
+        }
+        
+        if ($success_count > 0 && $error_count === 0) {
+            add_settings_error('bd_product_feed', 'multilingual_feeds_generated',
+                sprintf(__('%d flerspråklige feeds generert vellykket', 'bd-product-feed'), $success_count), 'updated');
+        } elseif ($success_count > 0 && $error_count > 0) {
+            add_settings_error('bd_product_feed', 'multilingual_feeds_partial',
+                sprintf(__('%d feeds generert, %d feilet', 'bd-product-feed'), $success_count, $error_count), 'updated');
+        } else {
+            add_settings_error('bd_product_feed', 'multilingual_feeds_failed',
+                __('Kunne ikke generere flerspråklige feeds', 'bd-product-feed'));
         }
     }
     
@@ -224,6 +276,9 @@ class BD_Admin_Interface {
                 <a href="?page=bd-product-feed&tab=validation" class="nav-tab <?php echo $active_tab === 'validation' ? 'nav-tab-active' : ''; ?>">
                     <?php _e('Validering', 'bd-product-feed'); ?>
                 </a>
+                <a href="?page=bd-product-feed&tab=multilingual" class="nav-tab <?php echo $active_tab === 'multilingual' ? 'nav-tab-active' : ''; ?>">
+                    <?php _e('Flerspråklig', 'bd-product-feed'); ?>
+                </a>
                 <a href="?page=bd-product-feed&tab=logs" class="nav-tab <?php echo $active_tab === 'logs' ? 'nav-tab-active' : ''; ?>">
                     <?php _e('Logger', 'bd-product-feed'); ?>
                 </a>
@@ -244,6 +299,9 @@ class BD_Admin_Interface {
                         break;
                     case 'validation':
                         $this->display_validation_tab();
+                        break;
+                    case 'multilingual':
+                        $this->display_multilingual_tab();
                         break;
                     case 'logs':
                         $this->display_logs_tab();
@@ -719,6 +777,139 @@ class BD_Admin_Interface {
                            value="<?php _e('Generer Feed Nå', 'bd-product-feed'); ?>">
                 </form>
             </div>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+    
+    /**
+     * Display multilingual tab
+     */
+    private function display_multilingual_tab() {
+        $options = $this->core->get_options();
+        $available_languages = $this->multilingual->get_available_languages_list();
+        $supported_languages = $this->multilingual->get_supported_languages();
+        $multilingual_plugin = $this->multilingual->get_multilingual_plugin();
+        $is_multilingual_active = $this->multilingual->is_multilingual_active();
+        
+        ?>
+        <div class="bd-settings-section">
+            <h3><?php _e('Flerspråklig støtte', 'bd-product-feed'); ?></h3>
+            
+            <?php if (!$is_multilingual_active): ?>
+            <div class="bd-warning-box">
+                <h4><?php _e('Ingen flerspråklig plugin funnet', 'bd-product-feed'); ?></h4>
+                <p><?php _e('For å bruke flerspråklig støtte må du installere og aktivere en av følgende plugins:', 'bd-product-feed'); ?></p>
+                <ul>
+                    <li><strong>WPML</strong> - WordPress Multilingual Plugin</li>
+                    <li><strong>Polylang</strong> - Gratis flerspråklig plugin</li>
+                    <li><strong>qTranslate-X</strong> - Enkel flerspråklig løsning</li>
+                </ul>
+                <p><?php _e('Når du har installert en flerspråklig plugin, vil du kunne generere feeds for flere språk automatisk.', 'bd-product-feed'); ?></p>
+            </div>
+            <?php else: ?>
+            <div class="bd-info-box">
+                <h4><?php printf(__('Flerspråklig plugin funnet: %s', 'bd-product-feed'), $multilingual_plugin); ?></h4>
+                <p><?php _e('Du kan nå generere feeds for flere språk basert på dine språkinnstillinger.', 'bd-product-feed'); ?></p>
+            </div>
+            
+            <form method="post">
+                <?php wp_nonce_field('bd_product_feed_settings', 'bd_nonce'); ?>
+                
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><?php _e('Aktiver flerspråklig støtte', 'bd-product-feed'); ?></th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="multilingual_enabled" value="1"
+                                       <?php checked($options['multilingual_enabled']); ?> />
+                                <?php _e('Generer separate feeds for hvert språk', 'bd-product-feed'); ?>
+                            </label>
+                            <p class="description"><?php _e('Når aktivert, vil det genereres en egen feed for hvert aktivt språk på nettstedet.', 'bd-product-feed'); ?></p>
+                        </td>
+                    </tr>
+                    
+                    <?php if (!empty($available_languages)): ?>
+                    <tr>
+                        <th scope="row"><?php _e('Tilgjengelige språk', 'bd-product-feed'); ?></th>
+                        <td>
+                            <fieldset>
+                                <?php foreach ($available_languages as $locale => $language_data): ?>
+                                <label style="display: block; margin-bottom: 5px;">
+                                    <input type="checkbox" name="target_languages[]" value="<?php echo esc_attr($locale); ?>"
+                                           <?php checked(in_array($locale, $options['target_languages'])); ?> />
+                                    <?php echo esc_html($language_data['name']); ?>
+                                    <small>(<?php echo esc_html($language_data['code']); ?>)</small>
+                                    <?php if ($language_data['active']): ?>
+                                    <span class="bd-label success"><?php _e('Aktiv', 'bd-product-feed'); ?></span>
+                                    <?php endif; ?>
+                                </label>
+                                <?php endforeach; ?>
+                            </fieldset>
+                            <p class="description"><?php _e('Velg hvilke språk du vil generere feeds for.', 'bd-product-feed'); ?></p>
+                        </td>
+                    </tr>
+                    <?php endif; ?>
+                </table>
+                
+                <p class="submit">
+                    <input type="submit" name="bd_save_settings" class="button-primary"
+                           value="<?php _e('Lagre flerspråklige innstillinger', 'bd-product-feed'); ?>" />
+                </p>
+            </form>
+            
+            <?php if ($options['multilingual_enabled'] && !empty($options['target_languages'])): ?>
+            <div class="bd-settings-section">
+                <h4><?php _e('Flerspråklige feed-URLer', 'bd-product-feed'); ?></h4>
+                
+                <?php
+                $multilingual_urls = $this->multilingual->get_multilingual_feed_urls();
+                if (!empty($multilingual_urls)):
+                ?>
+                <table class="wp-list-table widefat fixed striped">
+                    <thead>
+                        <tr>
+                            <th><?php _e('Språk', 'bd-product-feed'); ?></th>
+                            <th><?php _e('Språkkode', 'bd-product-feed'); ?></th>
+                            <th><?php _e('Feed URL', 'bd-product-feed'); ?></th>
+                            <th><?php _e('Status', 'bd-product-feed'); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($multilingual_urls as $locale => $url_data): ?>
+                        <?php if (in_array($locale, $options['target_languages'])): ?>
+                        <tr>
+                            <td><?php echo esc_html($url_data['language']); ?></td>
+                            <td><code><?php echo esc_html($url_data['code']); ?></code></td>
+                            <td>
+                                <code><?php echo esc_url($url_data['url']); ?></code>
+                                <button type="button" class="button button-small"
+                                        onclick="navigator.clipboard.writeText('<?php echo esc_js($url_data['url']); ?>')">
+                                    <?php _e('Kopier', 'bd-product-feed'); ?>
+                                </button>
+                            </td>
+                            <td>
+                                <span class="bd-label <?php echo $url_data['exists'] ? 'success' : 'warning'; ?>">
+                                    <?php echo $url_data['exists'] ? __('Generert', 'bd-product-feed') : __('Ikke generert', 'bd-product-feed'); ?>
+                                </span>
+                            </td>
+                        </tr>
+                        <?php endif; ?>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+                
+                <div style="margin-top: 15px;">
+                    <form method="post" style="display: inline-block; margin-right: 10px;">
+                        <?php wp_nonce_field('bd_product_feed_generate', 'bd_nonce'); ?>
+                        <input type="submit" name="bd_generate_multilingual_feeds" class="button button-primary"
+                               value="<?php _e('Generer alle flerspråklige feeds', 'bd-product-feed'); ?>"
+                               onclick="return confirm('<?php _e('Er du sikker på at du vil regenerere alle flerspråklige feeds?', 'bd-product-feed'); ?>')">
+                    </form>
+                </div>
+                <?php endif; ?>
+            </div>
+            <?php endif; ?>
             <?php endif; ?>
         </div>
         <?php
