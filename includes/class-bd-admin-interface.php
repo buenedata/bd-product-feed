@@ -1,0 +1,641 @@
+<?php
+/**
+ * BD Admin Interface Class - Complete Version
+ * Handles the WordPress admin interface using BD design system
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+class BD_Admin_Interface {
+    
+    /**
+     * Core instance
+     */
+    private $core;
+    
+    /**
+     * Product filter instance
+     */
+    private $product_filter;
+    
+    /**
+     * Currency converter instance
+     */
+    private $currency_converter;
+    
+    /**
+     * Cron manager instance
+     */
+    private $cron_manager;
+    
+    /**
+     * Feed validator instance
+     */
+    private $feed_validator;
+    
+    /**
+     * Constructor
+     */
+    public function __construct() {
+        $this->core = new BD_Product_Feed_Core();
+        $this->product_filter = new BD_Product_Filter();
+        $this->currency_converter = new BD_Currency_Converter();
+        $this->cron_manager = new BD_Cron_Manager();
+        $this->feed_validator = new BD_Feed_Validator();
+        
+        // Hook into WordPress admin
+        add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
+        add_action('admin_init', array($this, 'handle_form_submissions'));
+        add_action('admin_notices', array($this, 'display_admin_notices'));
+    }
+    
+    /**
+     * Enqueue admin scripts and styles
+     */
+    public function enqueue_admin_scripts($hook) {
+        // Only load on our plugin pages
+        if (strpos($hook, 'bd-product-feed') === false) {
+            return;
+        }
+        
+        // Enqueue CSS
+        wp_enqueue_style(
+            'bd-product-feed-admin',
+            BD_PRODUCT_FEED_URL . 'admin/css/admin.css',
+            array(),
+            BD_PRODUCT_FEED_VERSION
+        );
+        
+        // Enqueue JavaScript
+        wp_enqueue_script(
+            'bd-product-feed-admin',
+            BD_PRODUCT_FEED_URL . 'admin/js/admin.js',
+            array('jquery'),
+            BD_PRODUCT_FEED_VERSION,
+            true
+        );
+        
+        // Localize script
+        wp_localize_script('bd-product-feed-admin', 'bdProductFeed', array(
+            'ajaxUrl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('bd_product_feed_nonce'),
+            'strings' => array(
+                'generating' => __('Genererer feed...', 'bd-product-feed'),
+                'testing' => __('Tester feed...', 'bd-product-feed'),
+                'validating' => __('Validerer feed...', 'bd-product-feed'),
+                'success' => __('Vellykket!', 'bd-product-feed'),
+                'error' => __('Feil oppstod', 'bd-product-feed'),
+                'confirm_regenerate' => __('Er du sikker på at du vil regenerere feed?', 'bd-product-feed'),
+            )
+        ));
+    }
+    
+    /**
+     * Handle form submissions
+     */
+    public function handle_form_submissions() {
+        if (!current_user_can('manage_options')) {
+            return;
+        }
+        
+        // Handle settings save
+        if (isset($_POST['bd_save_settings']) && wp_verify_nonce($_POST['bd_nonce'], 'bd_product_feed_settings')) {
+            $this->save_settings();
+        }
+        
+        // Handle manual feed generation
+        if (isset($_POST['bd_generate_feed']) && wp_verify_nonce($_POST['bd_nonce'], 'bd_product_feed_generate')) {
+            $this->generate_feed_manual();
+        }
+        
+        // Handle test feed generation
+        if (isset($_POST['bd_test_feed']) && wp_verify_nonce($_POST['bd_nonce'], 'bd_product_feed_test')) {
+            $this->test_feed_manual();
+        }
+    }
+    
+    /**
+     * Save plugin settings
+     */
+    private function save_settings() {
+        $settings = array(
+            'update_frequency' => sanitize_text_field($_POST['update_frequency']),
+            'include_categories' => isset($_POST['include_categories']) ? array_map('intval', $_POST['include_categories']) : array(),
+            'exclude_categories' => isset($_POST['exclude_categories']) ? array_map('intval', $_POST['exclude_categories']) : array(),
+            'product_status' => isset($_POST['product_status']) ? array_map('sanitize_text_field', $_POST['product_status']) : array('publish'),
+            'stock_status' => isset($_POST['stock_status']) ? array_map('sanitize_text_field', $_POST['stock_status']) : array('instock'),
+            'currency_conversion' => isset($_POST['currency_conversion']),
+            'target_currencies' => isset($_POST['target_currencies']) ? array_map('sanitize_text_field', $_POST['target_currencies']) : array(),
+            'feed_title' => sanitize_text_field($_POST['feed_title']),
+            'feed_description' => sanitize_textarea_field($_POST['feed_description']),
+            'email_notifications' => isset($_POST['email_notifications']),
+            'notification_email' => sanitize_email($_POST['notification_email']),
+        );
+        
+        // Validate settings
+        $validation_errors = $this->product_filter->validate_filter_options($settings);
+        
+        if (!empty($validation_errors)) {
+            add_settings_error('bd_product_feed', 'validation_error', implode('<br>', $validation_errors));
+            return;
+        }
+        
+        // Save settings
+        foreach ($settings as $key => $value) {
+            $this->core->update_option($key, $value);
+        }
+        
+        // Update cron schedule if frequency changed
+        $this->cron_manager->update_frequency($settings['update_frequency']);
+        
+        add_settings_error('bd_product_feed', 'settings_saved', __('Innstillinger lagret', 'bd-product-feed'), 'updated');
+    }
+    
+    /**
+     * Generate feed manually
+     */
+    private function generate_feed_manual() {
+        $result = $this->core->generate_feed();
+        
+        if ($result['success']) {
+            add_settings_error('bd_product_feed', 'feed_generated', $result['message'], 'updated');
+        } else {
+            add_settings_error('bd_product_feed', 'feed_error', $result['message']);
+        }
+    }
+    
+    /**
+     * Test feed manually
+     */
+    private function test_feed_manual() {
+        $result = $this->core->test_feed();
+        
+        if ($result['success']) {
+            add_settings_error('bd_product_feed', 'feed_tested', $result['message'], 'updated');
+        } else {
+            add_settings_error('bd_product_feed', 'feed_test_error', $result['message']);
+        }
+    }
+    
+    /**
+     * Display admin notices
+     */
+    public function display_admin_notices() {
+        settings_errors('bd_product_feed');
+    }
+    
+    /**
+     * Display main admin page
+     */
+    public function display_admin_page() {
+        $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'dashboard';
+        
+        ?>
+        <div class="wrap bd-product-feed-admin">
+            <!-- Header Section -->
+            <div class="bd-admin-header">
+                <div class="bd-branding">
+                    <h2>🛒 <?php _e('Product Feed', 'bd-product-feed'); ?></h2>
+                    <p><?php _e('Generer produktfeed for Google Merchant Center og prisportaler', 'bd-product-feed'); ?></p>
+                </div>
+                <div class="bd-actions">
+                    <button type="button" class="button button-primary" id="bd-generate-feed">
+                        <?php _e('Generer Feed', 'bd-product-feed'); ?>
+                    </button>
+                    <button type="button" class="button button-secondary" id="bd-test-feed">
+                        <?php _e('Test Feed', 'bd-product-feed'); ?>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Navigation Tabs -->
+            <nav class="nav-tab-wrapper">
+                <a href="?page=bd-product-feed&tab=dashboard" class="nav-tab <?php echo $active_tab === 'dashboard' ? 'nav-tab-active' : ''; ?>">
+                    <?php _e('Dashboard', 'bd-product-feed'); ?>
+                </a>
+                <a href="?page=bd-product-feed&tab=settings" class="nav-tab <?php echo $active_tab === 'settings' ? 'nav-tab-active' : ''; ?>">
+                    <?php _e('Innstillinger', 'bd-product-feed'); ?>
+                </a>
+                <a href="?page=bd-product-feed&tab=products" class="nav-tab <?php echo $active_tab === 'products' ? 'nav-tab-active' : ''; ?>">
+                    <?php _e('Produkter', 'bd-product-feed'); ?>
+                </a>
+                <a href="?page=bd-product-feed&tab=validation" class="nav-tab <?php echo $active_tab === 'validation' ? 'nav-tab-active' : ''; ?>">
+                    <?php _e('Validering', 'bd-product-feed'); ?>
+                </a>
+                <a href="?page=bd-product-feed&tab=logs" class="nav-tab <?php echo $active_tab === 'logs' ? 'nav-tab-active' : ''; ?>">
+                    <?php _e('Logger', 'bd-product-feed'); ?>
+                </a>
+            </nav>
+            
+            <!-- Tab Content -->
+            <div class="tab-content active">
+                <?php
+                switch ($active_tab) {
+                    case 'dashboard':
+                        $this->display_dashboard_tab();
+                        break;
+                    case 'settings':
+                        $this->display_settings_tab();
+                        break;
+                    case 'products':
+                        $this->display_products_tab();
+                        break;
+                    case 'validation':
+                        $this->display_validation_tab();
+                        break;
+                    case 'logs':
+                        $this->display_logs_tab();
+                        break;
+                    default:
+                        $this->display_dashboard_tab();
+                }
+                ?>
+            </div>
+        </div>
+        <?php
+    }
+    
+    /**
+     * Display dashboard tab
+     */
+    private function display_dashboard_tab() {
+        $feed_stats = $this->core->get_feed_stats();
+        $cron_status = $this->cron_manager->get_cron_status();
+        $product_stats = $this->product_filter->get_product_statistics();
+        
+        ?>
+        <div class="bd-settings-section">
+            <h3><?php _e('Feed Status', 'bd-product-feed'); ?></h3>
+            
+            <div class="bd-status-grid">
+                <div class="bd-status-item">
+                    <strong><?php _e('Feed Status', 'bd-product-feed'); ?></strong>
+                    <span class="bd-label <?php echo $feed_stats['exists'] ? 'success' : 'error'; ?>">
+                        <?php echo $feed_stats['exists'] ? __('Aktiv', 'bd-product-feed') : __('Ikke generert', 'bd-product-feed'); ?>
+                    </span>
+                </div>
+                
+                <div class="bd-status-item">
+                    <strong><?php _e('Produkter i feed', 'bd-product-feed'); ?></strong>
+                    <span><?php echo number_format($feed_stats['product_count']); ?></span>
+                </div>
+                
+                <div class="bd-status-item">
+                    <strong><?php _e('Sist oppdatert', 'bd-product-feed'); ?></strong>
+                    <span>
+                        <?php 
+                        if ($feed_stats['last_modified']) {
+                            echo human_time_diff($feed_stats['last_modified']) . ' ' . __('siden', 'bd-product-feed');
+                        } else {
+                            echo __('Aldri', 'bd-product-feed');
+                        }
+                        ?>
+                    </span>
+                </div>
+                
+                <div class="bd-status-item">
+                    <strong><?php _e('Filstørrelse', 'bd-product-feed'); ?></strong>
+                    <span><?php echo $feed_stats['file_size'] ? size_format($feed_stats['file_size']) : '0 B'; ?></span>
+                </div>
+                
+                <div class="bd-status-item">
+                    <strong><?php _e('Automatisk oppdatering', 'bd-product-feed'); ?></strong>
+                    <span class="bd-label <?php echo $cron_status['is_scheduled'] ? 'success' : 'warning'; ?>">
+                        <?php echo $cron_status['is_scheduled'] ? __('Aktiv', 'bd-product-feed') : __('Inaktiv', 'bd-product-feed'); ?>
+                    </span>
+                </div>
+                
+                <div class="bd-status-item">
+                    <strong><?php _e('Neste oppdatering', 'bd-product-feed'); ?></strong>
+                    <span><?php echo $this->cron_manager->get_next_run_human(); ?></span>
+                </div>
+            </div>
+            
+            <?php if ($feed_stats['exists'] && $feed_stats['feed_url']): ?>
+            <div class="bd-info-box">
+                <strong><?php _e('Feed URL:', 'bd-product-feed'); ?></strong><br>
+                <code><?php echo esc_url($feed_stats['feed_url']); ?></code>
+                <button type="button" class="button button-small" onclick="navigator.clipboard.writeText('<?php echo esc_js($feed_stats['feed_url']); ?>')">
+                    <?php _e('Kopier', 'bd-product-feed'); ?>
+                </button>
+            </div>
+            <?php endif; ?>
+        </div>
+        
+        <div class="bd-settings-section">
+            <h3><?php _e('Produktstatistikk', 'bd-product-feed'); ?></h3>
+            
+            <div class="bd-status-grid">
+                <div class="bd-status-item">
+                    <strong><?php _e('Totalt produkter', 'bd-product-feed'); ?></strong>
+                    <span><?php echo number_format($product_stats['total_products']); ?></span>
+                </div>
+                
+                <div class="bd-status-item">
+                    <strong><?php _e('Publiserte produkter', 'bd-product-feed'); ?></strong>
+                    <span><?php echo number_format($product_stats['published_products']); ?></span>
+                </div>
+                
+                <div class="bd-status-item">
+                    <strong><?php _e('På lager', 'bd-product-feed'); ?></strong>
+                    <span><?php echo number_format($product_stats['in_stock_products']); ?></span>
+                </div>
+                
+                <div class="bd-status-item">
+                    <strong><?php _e('Med bilder', 'bd-product-feed'); ?></strong>
+                    <span><?php echo number_format($product_stats['products_with_images']); ?></span>
+                </div>
+                
+                <div class="bd-status-item">
+                    <strong><?php _e('Med priser', 'bd-product-feed'); ?></strong>
+                    <span><?php echo number_format($product_stats['products_with_prices']); ?></span>
+                </div>
+                
+                <div class="bd-status-item">
+                    <strong><?php _e('Kategorier', 'bd-product-feed'); ?></strong>
+                    <span><?php echo number_format($product_stats['categories_count']); ?></span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bd-settings-section">
+            <h3><?php _e('Hurtighandlinger', 'bd-product-feed'); ?></h3>
+            
+            <form method="post" style="display: inline-block; margin-right: 10px;">
+                <?php wp_nonce_field('bd_product_feed_generate', 'bd_nonce'); ?>
+                <input type="submit" name="bd_generate_feed" class="button button-primary" 
+                       value="<?php _e('Generer Feed Nå', 'bd-product-feed'); ?>"
+                       onclick="return confirm('<?php _e('Er du sikker på at du vil regenerere feed?', 'bd-product-feed'); ?>')">
+            </form>
+            
+            <form method="post" style="display: inline-block; margin-right: 10px;">
+                <?php wp_nonce_field('bd_product_feed_test', 'bd_nonce'); ?>
+                <input type="submit" name="bd_test_feed" class="button button-secondary" 
+                       value="<?php _e('Test Feed (10 produkter)', 'bd-product-feed'); ?>">
+            </form>
+            
+            <button type="button" class="button button-secondary" id="bd-validate-feed">
+                <?php _e('Valider Feed', 'bd-product-feed'); ?>
+            </button>
+        </div>
+        <?php
+    }
+    
+    /**
+     * Display settings tab
+     */
+    private function display_settings_tab() {
+        $options = $this->core->get_options();
+        $categories = $this->product_filter->get_product_categories();
+        $frequencies = $this->cron_manager->get_available_frequencies();
+        $currencies = $this->currency_converter->get_supported_currencies();
+        
+        ?>
+        <form method="post">
+            <?php wp_nonce_field('bd_product_feed_settings', 'bd_nonce'); ?>
+            
+            <div class="bd-settings-section">
+                <h3><?php _e('Grunnleggende innstillinger', 'bd-product-feed'); ?></h3>
+                
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><?php _e('Feed tittel', 'bd-product-feed'); ?></th>
+                        <td>
+                            <input type="text" name="feed_title" class="regular-text" 
+                                   value="<?php echo esc_attr($options['feed_title']); ?>" />
+                            <p class="description"><?php _e('Tittel som vises i feed', 'bd-product-feed'); ?></p>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row"><?php _e('Feed beskrivelse', 'bd-product-feed'); ?></th>
+                        <td>
+                            <textarea name="feed_description" class="large-text" rows="3"><?php echo esc_textarea($options['feed_description']); ?></textarea>
+                            <p class="description"><?php _e('Beskrivelse av feed', 'bd-product-feed'); ?></p>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row"><?php _e('Oppdateringsfrekvens', 'bd-product-feed'); ?></th>
+                        <td>
+                            <select name="update_frequency">
+                                <?php foreach ($frequencies as $key => $label): ?>
+                                <option value="<?php echo esc_attr($key); ?>" <?php selected($options['update_frequency'], $key); ?>>
+                                    <?php echo esc_html($label); ?>
+                                </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <p class="description"><?php _e('Hvor ofte feed skal oppdateres automatisk', 'bd-product-feed'); ?></p>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div class="bd-settings-section">
+                <h3><?php _e('Produktfiltrering', 'bd-product-feed'); ?></h3>
+                
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><?php _e('Produktstatus', 'bd-product-feed'); ?></th>
+                        <td>
+                            <fieldset>
+                                <label>
+                                    <input type="checkbox" name="product_status[]" value="publish" 
+                                           <?php checked(in_array('publish', $options['product_status'])); ?> />
+                                    <?php _e('Publisert', 'bd-product-feed'); ?>
+                                </label><br>
+                                <label>
+                                    <input type="checkbox" name="product_status[]" value="private" 
+                                           <?php checked(in_array('private', $options['product_status'])); ?> />
+                                    <?php _e('Privat', 'bd-product-feed'); ?>
+                                </label><br>
+                                <label>
+                                    <input type="checkbox" name="product_status[]" value="draft" 
+                                           <?php checked(in_array('draft', $options['product_status'])); ?> />
+                                    <?php _e('Utkast', 'bd-product-feed'); ?>
+                                </label>
+                            </fieldset>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row"><?php _e('Lagerstatus', 'bd-product-feed'); ?></th>
+                        <td>
+                            <fieldset>
+                                <label>
+                                    <input type="checkbox" name="stock_status[]" value="instock" 
+                                           <?php checked(in_array('instock', $options['stock_status'])); ?> />
+                                    <?php _e('På lager', 'bd-product-feed'); ?>
+                                </label><br>
+                                <label>
+                                    <input type="checkbox" name="stock_status[]" value="outofstock" 
+                                           <?php checked(in_array('outofstock', $options['stock_status'])); ?> />
+                                    <?php _e('Ikke på lager', 'bd-product-feed'); ?>
+                                </label><br>
+                                <label>
+                                    <input type="checkbox" name="stock_status[]" value="onbackorder" 
+                                           <?php checked(in_array('onbackorder', $options['stock_status'])); ?> />
+                                    <?php _e('Restordre', 'bd-product-feed'); ?>
+                                </label>
+                            </fieldset>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row"><?php _e('Inkluder kategorier', 'bd-product-feed'); ?></th>
+                        <td>
+                            <div style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; padding: 10px;">
+                                <?php foreach ($categories as $category): ?>
+                                <label style="display: block;">
+                                    <input type="checkbox" name="include_categories[]" value="<?php echo $category->term_id; ?>" 
+                                           <?php checked(in_array($category->term_id, $options['include_categories'])); ?> />
+                                    <?php echo $category->indent . esc_html($category->name); ?>
+                                    <small>(<?php echo $category->count; ?>)</small>
+                                </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <p class="description"><?php _e('Velg spesifikke kategorier å inkludere. Tom = alle kategorier', 'bd-product-feed'); ?></p>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row"><?php _e('Ekskluder kategorier', 'bd-product-feed'); ?></th>
+                        <td>
+                            <div style="max-height: 200px; overflow-y: auto; border: 1px solid #ddd; padding: 10px;">
+                                <?php foreach ($categories as $category): ?>
+                                <label style="display: block;">
+                                    <input type="checkbox" name="exclude_categories[]" value="<?php echo $category->term_id; ?>" 
+                                           <?php checked(in_array($category->term_id, $options['exclude_categories'])); ?> />
+                                    <?php echo $category->indent . esc_html($category->name); ?>
+                                    <small>(<?php echo $category->count; ?>)</small>
+                                </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <p class="description"><?php _e('Velg kategorier å ekskludere fra feed', 'bd-product-feed'); ?></p>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div class="bd-settings-section">
+                <h3><?php _e('Valutakonvertering', 'bd-product-feed'); ?></h3>
+                
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><?php _e('Aktiver valutakonvertering', 'bd-product-feed'); ?></th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="currency_conversion" value="1" 
+                                       <?php checked($options['currency_conversion']); ?> />
+                                <?php _e('Generer feed for flere valutaer', 'bd-product-feed'); ?>
+                            </label>
+                            <p class="description"><?php _e('Krever API-nøkkel for valutakurser', 'bd-product-feed'); ?></p>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row"><?php _e('Målvalutaer', 'bd-product-feed'); ?></th>
+                        <td>
+                            <fieldset>
+                                <?php foreach ($currencies as $code => $name): ?>
+                                <label>
+                                    <input type="checkbox" name="target_currencies[]" value="<?php echo esc_attr($code); ?>" 
+                                           <?php checked(in_array($code, $options['target_currencies'])); ?> />
+                                    <?php echo esc_html($name . ' (' . $code . ')'); ?>
+                                </label><br>
+                                <?php endforeach; ?>
+                            </fieldset>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+            
+            <div class="bd-settings-section">
+                <h3><?php _e('E-postvarsler', 'bd-product-feed'); ?></h3>
+                
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><?php _e('Aktiver e-postvarsler', 'bd-product-feed'); ?></th>
+                        <td>
+                            <label>
+                                <input type="checkbox" name="email_notifications" value="1" 
+                                       <?php checked($options['email_notifications']); ?> />
+                                <?php _e('Send e-post ved vellykket/mislykket feed-generering', 'bd-product-feed'); ?>
+                            </label>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row"><?php _e('E-postadresse', 'bd-product-feed'); ?></th>
+                        <td>
+                            <input type="email" name="notification_email" class="regular-text" 
+                                   value="<?php echo esc_attr($options['notification_email']); ?>" />
+                            <p class="description"><?php _e('E-postadresse for varsler', 'bd-product-feed'); ?></p>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+            
+            <p class="submit">
+                <input type="submit" name="bd_save_settings" class="button-primary" 
+                       value="<?php _e('Lagre innstillinger', 'bd-product-feed'); ?>" />
+            </p>
+        </form>
+        <?php
+    }
+    
+    /**
+     * Display products tab
+     */
+    private function display_products_tab() {
+        $options = $this->core->get_options();
+        $sample_products = $this->product_filter->get_sample_products($options, 10);
+        $product_count = $this->product_filter->get_product_count($options);
+        
+        ?>
+        <div class="bd-settings-section">
+            <h3><?php _e('Produktforhåndsvisning', 'bd-product-feed'); ?></h3>
+            
+            <p>
+                <?php printf(
+                    __('Med gjeldende filtre vil %d produkter bli inkludert i feed.', 'bd-product-feed'),
+                    number_format($product_count)
+                ); ?>
+            </p>
+            
+            <?php if (!empty($sample_products)): ?>
+            <table class="wp-list-table widefat fixed striped">
+                <thead>
+                    <tr>
+                        <th><?php _e('Bilde', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Navn', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Pris', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Lagerstatus', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Kategorier', 'bd-product-feed'); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($sample_products as $product): ?>
+                    <tr>
+                        <td>
+                            <?php if ($product['image']): ?>
+                            <img src="<?php echo esc_url($product['image']); ?>" alt="" style="width: 50px; height: 50px; object-fit: cover;">
+                            <?php else: ?>
+                            <div style="width: 50px; height: 50px; background: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 10px;">
+                                <?php _e('Ingen bilde', 'bd-product-feed'); ?>
+                            </div>
+                            <?php endif; ?>
+                        </td>
+                        <td>
+                            <strong><?php echo esc_html($product['name']); ?></strong><br>
+                            <small>ID: <?php echo $product['id']; ?></small>
+                        </td>
+                        <td><?php echo wc_price($product['price']); ?></td>
+                        <td>
+                            <span class="bd-label <?php echo $product['stock_status'] === 'instock' ? 'success' : 'warning'; ?>">
+                                <?php 
+                                switch ($product['stock_status']) {
+                                    case 'instock':
+                                        _

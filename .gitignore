@@ -1,0 +1,15 @@
+# BD Product Feed WordPress Plugin  
+  
+# WordPress  
+wp-config.php  
+wp-content/uploads/  
+  
+# Plugin specific  
+feeds/  
+*.log  
+  
+# Development  
+node_modules/  
+.vscode/  
+.DS_Store  
+Thumbs.db 

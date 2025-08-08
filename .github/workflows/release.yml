@@ -1,0 +1,144 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [ main, master ]
+    paths-ignore:
+      - 'README.md'
+      - '.gitignore'
+      - 'BD-Product-Feed-Architecture.md'
+      - '*.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Get current version
+      id: version
+      run: |
+        VERSION=$(grep -E "Version:\s*[0-9]+\.[0-9]+(\.[0-9]+)?" bd-product-feed.php | head -1 | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?")
+        echo "current_version=$VERSION" >> $GITHUB_OUTPUT
+        echo "Current version: $VERSION"
+
+    - name: Check if release exists
+      id: check_release
+      run: |
+        VERSION="${{ steps.version.outputs.current_version }}"
+        if git tag | grep -q "^v$VERSION$"; then
+          echo "release_exists=true" >> $GITHUB_OUTPUT
+          echo "Release v$VERSION already exists"
+        else
+          echo "release_exists=false" >> $GITHUB_OUTPUT
+          echo "Release v$VERSION does not exist"
+        fi
+
+    - name: Generate changelog
+      id: changelog
+      if: steps.check_release.outputs.release_exists == 'false'
+      run: |
+        LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+        if [ -z "$LAST_TAG" ]; then
+          COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges -10)
+        else
+          COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"- %s (%h)" --no-merges)
+        fi
+        
+        echo "changelog<<EOF" >> $GITHUB_OUTPUT
+        echo "## 🛒 BD Product Feed v${{ steps.version.outputs.current_version }}" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "### 🚀 Nye funksjoner og forbedringer:" >> $GITHUB_OUTPUT
+        echo "$COMMITS" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "### 📋 Installasjon:" >> $GITHUB_OUTPUT
+        echo "1. Last ned ZIP-filen fra denne releasen" >> $GITHUB_OUTPUT
+        echo "2. Gå til WordPress Admin → Plugins → Legg til ny → Last opp plugin" >> $GITHUB_OUTPUT
+        echo "3. Velg ZIP-filen og installer" >> $GITHUB_OUTPUT
+        echo "4. Aktiver pluginen" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "### ⚙️ Funksjoner:" >> $GITHUB_OUTPUT
+        echo "- 🛒 Google Merchant Center kompatibel XML feed" >> $GITHUB_OUTPUT
+        echo "- 💱 Automatisk valutakonvertering" >> $GITHUB_OUTPUT
+        echo "- 🔄 Planlagte oppdateringer" >> $GITHUB_OUTPUT
+        echo "- 🎯 Produktfiltrering etter kategorier og status" >> $GITHUB_OUTPUT
+        echo "- ✅ Feed validering og testing" >> $GITHUB_OUTPUT
+        echo "- 📊 Detaljert logging og statistikk" >> $GITHUB_OUTPUT
+        echo "- 🎨 Moderne BD design system" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "### 🔄 Automatisk oppdatering:" >> $GITHUB_OUTPUT
+        echo "Denne versjonen støtter automatisk oppdatering via WordPress admin." >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "### 🆘 Support:" >> $GITHUB_OUTPUT
+        echo "- Email: support@buenedata.no" >> $GITHUB_OUTPUT
+        echo "- GitHub Issues: [Rapporter problemer](https://github.com/buenedata/bd-product-feed/issues)" >> $GITHUB_OUTPUT
+        echo "" >> $GITHUB_OUTPUT
+        echo "*🤖 Automatisk generert av GitHub Actions*" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+    - name: Create plugin ZIP
+      if: steps.check_release.outputs.release_exists == 'false'
+      run: |
+        REPO_NAME=$(basename $GITHUB_REPOSITORY)
+        mkdir -p temp/$REPO_NAME
+        
+        # Copy plugin files, excluding development files
+        rsync -av \
+          --exclude='.git*' \
+          --exclude='node_modules' \
+          --exclude='*.log' \
+          --exclude='temp' \
+          --exclude='.github' \
+          --exclude='tests' \
+          --exclude='*.md' \
+          --exclude='package*.json' \
+          --exclude='composer.*' \
+          --exclude='phpunit.xml' \
+          --exclude='webpack.config.js' \
+          --exclude='gulpfile.js' \
+          --exclude='Gruntfile.js' \
+          --exclude='BD-*.txt' \
+          . temp/$REPO_NAME/
+        
+        # Ensure feeds directory exists
+        mkdir -p temp/$REPO_NAME/feeds
+        
+        # Create .htaccess for feeds directory
+        echo "Order deny,allow" > temp/$REPO_NAME/feeds/.htaccess
+        echo "Deny from all" >> temp/$REPO_NAME/feeds/.htaccess
+        
+        # Create ZIP
+        cd temp
+        zip -r ../$REPO_NAME.zip $REPO_NAME
+        cd ..
+        
+        echo "Created $REPO_NAME.zip"
+        ls -la $REPO_NAME.zip
+
+    - name: Create Release
+      if: steps.check_release.outputs.release_exists == 'false'
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v${{ steps.version.outputs.current_version }}
+        name: "🛒 BD Product Feed v${{ steps.version.outputs.current_version }}"
+        body: ${{ steps.changelog.outputs.changelog }}
+        draft: false
+        prerelease: false
+        files: ./${{ github.event.repository.name }}.zip
+        token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Update release notes
+      if: steps.check_release.outputs.release_exists == 'false'
+      run: |
+        echo "✅ Release v${{ steps.version.outputs.current_version }} created successfully!"
+        echo "📦 ZIP file: ${{ github.event.repository.name }}.zip"
+        echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/v${{ steps.version.outputs.current_version }}"
