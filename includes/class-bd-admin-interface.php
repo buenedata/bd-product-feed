@@ -41,6 +41,11 @@ class BD_Admin_Interface {
     private $multilingual;
     
     /**
+     * Settings manager instance
+     */
+    private $settings_manager;
+    
+    /**
      * Constructor
      */
     public function __construct() {
@@ -50,6 +55,7 @@ class BD_Admin_Interface {
         $this->cron_manager = new BD_Cron_Manager();
         $this->feed_validator = new BD_Feed_Validator();
         $this->multilingual = new BD_Multilingual();
+        $this->settings_manager = new BD_Settings_Manager();
         
         // Hook into WordPress admin
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
@@ -124,6 +130,11 @@ class BD_Admin_Interface {
         // Handle multilingual feed generation
         if (isset($_POST['bd_generate_multilingual_feeds']) && wp_verify_nonce($_POST['bd_nonce'], 'bd_product_feed_generate')) {
             $this->generate_multilingual_feeds_manual();
+        }
+        
+        // Handle settings reset
+        if (isset($_POST['bd_reset_settings']) && wp_verify_nonce($_POST['bd_nonce'], 'bd_product_feed_reset')) {
+            $this->reset_settings_manual();
         }
     }
     
@@ -232,6 +243,23 @@ class BD_Admin_Interface {
     }
     
     /**
+     * Reset settings manually
+     */
+    private function reset_settings_manual() {
+        $result = $this->settings_manager->reset_to_defaults(true);
+        
+        if ($result['success']) {
+            $message = $result['message'];
+            if ($result['backup_created']) {
+                $message .= ' ' . __('Sikkerhetskopi opprettet.', 'bd-product-feed');
+            }
+            add_settings_error('bd_product_feed', 'settings_reset', $message, 'updated');
+        } else {
+            add_settings_error('bd_product_feed', 'settings_reset_error', $result['message']);
+        }
+    }
+    
+    /**
      * Display admin notices
      */
     public function display_admin_notices() {
@@ -279,6 +307,9 @@ class BD_Admin_Interface {
                 <a href="?page=bd-product-feed&tab=multilingual" class="nav-tab <?php echo $active_tab === 'multilingual' ? 'nav-tab-active' : ''; ?>">
                     <?php _e('Flerspråklig', 'bd-product-feed'); ?>
                 </a>
+                <a href="?page=bd-product-feed&tab=import-export" class="nav-tab <?php echo $active_tab === 'import-export' ? 'nav-tab-active' : ''; ?>">
+                    <?php _e('Import/Export', 'bd-product-feed'); ?>
+                </a>
                 <a href="?page=bd-product-feed&tab=logs" class="nav-tab <?php echo $active_tab === 'logs' ? 'nav-tab-active' : ''; ?>">
                     <?php _e('Logger', 'bd-product-feed'); ?>
                 </a>
@@ -302,6 +333,9 @@ class BD_Admin_Interface {
                         break;
                     case 'multilingual':
                         $this->display_multilingual_tab();
+                        break;
+                    case 'import-export':
+                        $this->display_import_export_tab();
                         break;
                     case 'logs':
                         $this->display_logs_tab();
@@ -912,6 +946,191 @@ class BD_Admin_Interface {
             <?php endif; ?>
             <?php endif; ?>
         </div>
+        <?php
+    }
+    
+    /**
+     * Display import/export tab
+     */
+    private function display_import_export_tab() {
+        $available_backups = $this->settings_manager->get_available_backups();
+        
+        ?>
+        <div class="bd-settings-section">
+            <h3><?php _e('Eksporter innstillinger', 'bd-product-feed'); ?></h3>
+            
+            <p><?php _e('Last ned alle plugin-innstillinger som en JSON-fil for sikkerhetskopi eller overføring til en annen nettside.', 'bd-product-feed'); ?></p>
+            
+            <form method="post" action="<?php echo admin_url('admin-ajax.php'); ?>" style="margin-bottom: 20px;">
+                <input type="hidden" name="action" value="bd_export_settings">
+                <input type="hidden" name="nonce" value="<?php echo wp_create_nonce('bd_product_feed_nonce'); ?>">
+                <input type="submit" class="button button-primary" value="<?php _e('Last ned innstillinger', 'bd-product-feed'); ?>">
+            </form>
+            
+            <div class="bd-info-box">
+                <h4><?php _e('Eksporterte innstillinger inkluderer:', 'bd-product-feed'); ?></h4>
+                <ul>
+                    <li><?php _e('Feed-innstillinger (tittel, beskrivelse, frekvens)', 'bd-product-feed'); ?></li>
+                    <li><?php _e('Produktfiltrering (kategorier, status)', 'bd-product-feed'); ?></li>
+                    <li><?php _e('Valutakonvertering og målvalutaer', 'bd-product-feed'); ?></li>
+                    <li><?php _e('E-postvarsler og innstillinger', 'bd-product-feed'); ?></li>
+                    <li><?php _e('Flerspråklige innstillinger', 'bd-product-feed'); ?></li>
+                </ul>
+                <p><strong><?php _e('Merk:', 'bd-product-feed'); ?></strong> <?php _e('API-nøkler og sikkerhetsnøkler eksporteres ikke av sikkerhetshensyn.', 'bd-product-feed'); ?></p>
+            </div>
+        </div>
+        
+        <div class="bd-settings-section">
+            <h3><?php _e('Importer innstillinger', 'bd-product-feed'); ?></h3>
+            
+            <p><?php _e('Last opp en tidligere eksportert JSON-fil for å gjenopprette innstillinger.', 'bd-product-feed'); ?></p>
+            
+            <form id="bd-import-form" enctype="multipart/form-data" style="margin-bottom: 20px;">
+                <table class="form-table">
+                    <tr>
+                        <th scope="row"><?php _e('Velg fil', 'bd-product-feed'); ?></th>
+                        <td>
+                            <input type="file" name="import_file" id="import_file" accept=".json" required>
+                            <p class="description"><?php _e('Velg en JSON-fil eksportert fra BD Product Feed', 'bd-product-feed'); ?></p>
+                        </td>
+                    </tr>
+                    
+                    <tr>
+                        <th scope="row"><?php _e('Import-alternativer', 'bd-product-feed'); ?></th>
+                        <td>
+                            <fieldset>
+                                <label>
+                                    <input type="checkbox" name="overwrite" value="1" checked>
+                                    <?php _e('Overskriv eksisterende innstillinger', 'bd-product-feed'); ?>
+                                </label><br>
+                                <label>
+                                    <input type="checkbox" name="create_backup" value="1" checked>
+                                    <?php _e('Opprett sikkerhetskopi før import', 'bd-product-feed'); ?>
+                                </label>
+                            </fieldset>
+                        </td>
+                    </tr>
+                </table>
+                
+                <p class="submit">
+                    <input type="submit" class="button button-primary" value="<?php _e('Importer innstillinger', 'bd-product-feed'); ?>">
+                </p>
+            </form>
+            
+            <div id="bd-import-result" style="display: none;"></div>
+        </div>
+        
+        <?php if (!empty($available_backups)): ?>
+        <div class="bd-settings-section">
+            <h3><?php _e('Automatiske sikkerhetskopier', 'bd-product-feed'); ?></h3>
+            
+            <p><?php _e('Automatiske sikkerhetskopier opprettet av systemet.', 'bd-product-feed'); ?></p>
+            
+            <table class="wp-list-table widefat fixed striped">
+                <thead>
+                    <tr>
+                        <th><?php _e('Filnavn', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Opprettet', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Størrelse', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Versjon', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Innstillinger', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Handlinger', 'bd-product-feed'); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($available_backups as $backup): ?>
+                    <tr>
+                        <td><code><?php echo esc_html($backup['filename']); ?></code></td>
+                        <td><?php echo esc_html($backup['modified_formatted']); ?></td>
+                        <td><?php echo esc_html($backup['size_formatted']); ?></td>
+                        <td><?php echo esc_html($backup['version']); ?></td>
+                        <td><?php echo number_format($backup['settings_count']); ?></td>
+                        <td>
+                            <button type="button" class="button button-small bd-restore-backup"
+                                    data-filename="<?php echo esc_attr($backup['filename']); ?>">
+                                <?php _e('Gjenopprett', 'bd-product-feed'); ?>
+                            </button>
+                            <button type="button" class="button button-small bd-delete-backup"
+                                    data-filename="<?php echo esc_attr($backup['filename']); ?>">
+                                <?php _e('Slett', 'bd-product-feed'); ?>
+                            </button>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+        </div>
+        <?php endif; ?>
+        
+        <div class="bd-settings-section">
+            <h3><?php _e('Tilbakestill innstillinger', 'bd-product-feed'); ?></h3>
+            
+            <p><?php _e('Tilbakestill alle innstillinger til standardverdier. Dette kan ikke angres.', 'bd-product-feed'); ?></p>
+            
+            <form method="post" style="margin-bottom: 20px;">
+                <?php wp_nonce_field('bd_product_feed_reset', 'bd_nonce'); ?>
+                <input type="hidden" name="bd_reset_settings" value="1">
+                <input type="submit" class="button button-secondary"
+                       value="<?php _e('Tilbakestill til standardverdier', 'bd-product-feed'); ?>"
+                       onclick="return confirm('<?php _e('Er du sikker på at du vil tilbakestille alle innstillinger? Dette kan ikke angres.', 'bd-product-feed'); ?>')">
+            </form>
+            
+            <div class="bd-warning-box">
+                <p><strong><?php _e('Advarsel:', 'bd-product-feed'); ?></strong> <?php _e('Denne handlingen vil slette alle dine tilpassede innstillinger og kan ikke angres. En automatisk sikkerhetskopi vil bli opprettet først.', 'bd-product-feed'); ?></p>
+            </div>
+        </div>
+        
+        <script>
+        jQuery(document).ready(function($) {
+            // Handle import form submission
+            $('#bd-import-form').on('submit', function(e) {
+                e.preventDefault();
+                
+                var formData = new FormData();
+                formData.append('action', 'bd_import_settings');
+                formData.append('nonce', '<?php echo wp_create_nonce('bd_product_feed_nonce'); ?>');
+                formData.append('import_file', $('#import_file')[0].files[0]);
+                formData.append('overwrite', $('input[name="overwrite"]:checked').val() || '0');
+                formData.append('create_backup', $('input[name="create_backup"]:checked').val() || '0');
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: 'POST',
+                    data: formData,
+                    processData: false,
+                    contentType: false,
+                    success: function(response) {
+                        if (response.success) {
+                            $('#bd-import-result').html('<div class="notice notice-success"><p>' + response.data.message + '</p></div>').show();
+                        } else {
+                            $('#bd-import-result').html('<div class="notice notice-error"><p>' + response.data + '</p></div>').show();
+                        }
+                    },
+                    error: function() {
+                        $('#bd-import-result').html('<div class="notice notice-error"><p><?php _e('Feil ved import av innstillinger', 'bd-product-feed'); ?></p></div>').show();
+                    }
+                });
+            });
+            
+            // Handle backup restore
+            $('.bd-restore-backup').on('click', function() {
+                var filename = $(this).data('filename');
+                if (confirm('<?php _e('Er du sikker på at du vil gjenopprette denne sikkerhetskopien?', 'bd-product-feed'); ?>')) {
+                    // Implement restore functionality
+                    alert('<?php _e('Gjenopprettingsfunksjonalitet kommer snart', 'bd-product-feed'); ?>');
+                }
+            });
+            
+            // Handle backup deletion
+            $('.bd-delete-backup').on('click', function() {
+                var filename = $(this).data('filename');
+                if (confirm('<?php _e('Er du sikker på at du vil slette denne sikkerhetskopien?', 'bd-product-feed'); ?>')) {
+                    // Implement delete functionality
+                    alert('<?php _e('Slettingsfunksjonalitet kommer snart', 'bd-product-feed'); ?>');
+                }
+            });
+        });
+        </script>
         <?php
     }
     
