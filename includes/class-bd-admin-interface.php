@@ -46,6 +46,11 @@ class BD_Admin_Interface {
     private $settings_manager;
     
     /**
+     * Analytics instance
+     */
+    private $analytics;
+    
+    /**
      * Constructor
      */
     public function __construct() {
@@ -56,6 +61,7 @@ class BD_Admin_Interface {
         $this->feed_validator = new BD_Feed_Validator();
         $this->multilingual = new BD_Multilingual();
         $this->settings_manager = new BD_Settings_Manager();
+        $this->analytics = new BD_Analytics();
         
         // Hook into WordPress admin
         add_action('admin_enqueue_scripts', array($this, 'enqueue_admin_scripts'));
@@ -310,6 +316,9 @@ class BD_Admin_Interface {
                 <a href="?page=bd-product-feed&tab=import-export" class="nav-tab <?php echo $active_tab === 'import-export' ? 'nav-tab-active' : ''; ?>">
                     <?php _e('Import/Export', 'bd-product-feed'); ?>
                 </a>
+                <a href="?page=bd-product-feed&tab=analytics" class="nav-tab <?php echo $active_tab === 'analytics' ? 'nav-tab-active' : ''; ?>">
+                    <?php _e('Statistikk', 'bd-product-feed'); ?>
+                </a>
                 <a href="?page=bd-product-feed&tab=logs" class="nav-tab <?php echo $active_tab === 'logs' ? 'nav-tab-active' : ''; ?>">
                     <?php _e('Logger', 'bd-product-feed'); ?>
                 </a>
@@ -336,6 +345,9 @@ class BD_Admin_Interface {
                         break;
                     case 'import-export':
                         $this->display_import_export_tab();
+                        break;
+                    case 'analytics':
+                        $this->display_analytics_tab();
                         break;
                     case 'logs':
                         $this->display_logs_tab();
@@ -1130,6 +1142,370 @@ class BD_Admin_Interface {
                 }
             });
         });
+        </script>
+        <?php
+    }
+    
+    /**
+     * Display analytics tab
+     */
+    private function display_analytics_tab() {
+        $period = isset($_GET['period']) ? intval($_GET['period']) : 30;
+        $analytics_data = $this->analytics->get_dashboard_data($period);
+        
+        ?>
+        <div class="bd-settings-section">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h3><?php _e('Feed Statistikk og Analytics', 'bd-product-feed'); ?></h3>
+                <div>
+                    <select id="bd-analytics-period" onchange="window.location.href='?page=bd-product-feed&tab=analytics&period='+this.value">
+                        <option value="7" <?php selected($period, 7); ?>><?php _e('Siste 7 dager', 'bd-product-feed'); ?></option>
+                        <option value="30" <?php selected($period, 30); ?>><?php _e('Siste 30 dager', 'bd-product-feed'); ?></option>
+                        <option value="90" <?php selected($period, 90); ?>><?php _e('Siste 90 dager', 'bd-product-feed'); ?></option>
+                    </select>
+                    <button type="button" class="button button-secondary" id="bd-export-analytics">
+                        <?php _e('Eksporter data', 'bd-product-feed'); ?>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Key Metrics -->
+            <div class="bd-analytics-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px;">
+                <div class="bd-metric-card">
+                    <h4><?php _e('Totale tilganger', 'bd-product-feed'); ?></h4>
+                    <div class="bd-metric-value"><?php echo number_format($analytics_data['access_stats']['total_accesses']); ?></div>
+                    <div class="bd-metric-label"><?php printf(__('Siste %d dager', 'bd-product-feed'), $period); ?></div>
+                </div>
+                
+                <div class="bd-metric-card">
+                    <h4><?php _e('Unike besøkende', 'bd-product-feed'); ?></h4>
+                    <div class="bd-metric-value"><?php echo number_format($analytics_data['access_stats']['unique_visitors']); ?></div>
+                    <div class="bd-metric-label"><?php _e('Unike IP-adresser', 'bd-product-feed'); ?></div>
+                </div>
+                
+                <div class="bd-metric-card">
+                    <h4><?php _e('Suksessrate', 'bd-product-feed'); ?></h4>
+                    <div class="bd-metric-value"><?php echo $analytics_data['access_stats']['success_rate']; ?>%</div>
+                    <div class="bd-metric-label">
+                        <?php printf(__('%d feilede tilganger', 'bd-product-feed'), $analytics_data['access_stats']['failed_accesses']); ?>
+                    </div>
+                </div>
+                
+                <div class="bd-metric-card">
+                    <h4><?php _e('Feed-genereringer', 'bd-product-feed'); ?></h4>
+                    <div class="bd-metric-value"><?php echo number_format($analytics_data['generation_stats']['total_generations']); ?></div>
+                    <div class="bd-metric-label">
+                        <?php printf(__('%d%% suksess', 'bd-product-feed'), $analytics_data['generation_stats']['success_rate']); ?>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Daily Access Chart -->
+            <?php if (!empty($analytics_data['access_stats']['daily_stats'])): ?>
+            <div class="bd-chart-section">
+                <h4><?php _e('Daglige tilganger', 'bd-product-feed'); ?></h4>
+                <div class="bd-chart-container">
+                    <canvas id="bd-daily-chart" width="800" height="300"></canvas>
+                </div>
+            </div>
+            <?php endif; ?>
+            
+            <!-- Hourly Pattern -->
+            <div class="bd-chart-section">
+                <h4><?php _e('Tilgangsmønster (timer)', 'bd-product-feed'); ?></h4>
+                <div class="bd-chart-container">
+                    <canvas id="bd-hourly-chart" width="800" height="200"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bd-settings-section">
+            <h3><?php _e('Detaljert statistikk', 'bd-product-feed'); ?></h3>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px;">
+                <!-- Top Referrers -->
+                <div>
+                    <h4><?php _e('Topp referrere', 'bd-product-feed'); ?></h4>
+                    <?php if (!empty($analytics_data['top_referrers'])): ?>
+                    <table class="wp-list-table widefat fixed striped">
+                        <thead>
+                            <tr>
+                                <th><?php _e('Referrer', 'bd-product-feed'); ?></th>
+                                <th><?php _e('Tilganger', 'bd-product-feed'); ?></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($analytics_data['top_referrers'] as $referrer): ?>
+                            <tr>
+                                <td>
+                                    <?php 
+                                    $domain = parse_url($referrer->referer, PHP_URL_HOST);
+                                    echo $domain ? esc_html($domain) : __('Direkte tilgang', 'bd-product-feed');
+                                    ?>
+                                </td>
+                                <td><?php echo number_format($referrer->count); ?></td>
+                            </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    <?php else: ?>
+                    <p><?php _e('Ingen referrer-data tilgjengelig.', 'bd-product-feed'); ?></p>
+                    <?php endif; ?>
+                </div>
+                
+                <!-- User Agent Categories -->
+                <div>
+                    <h4><?php _e('Brukeragent-kategorier', 'bd-product-feed'); ?></h4>
+                    <div class="bd-user-agent-stats">
+                        <?php 
+                        $ua_stats = $analytics_data['user_agent_stats']['categories'];
+                        $total_ua = array_sum($ua_stats);
+                        ?>
+                        <?php foreach ($ua_stats as $category => $count): ?>
+                        <?php if ($count > 0): ?>
+                        <div class="bd-ua-category">
+                            <div class="bd-ua-label">
+                                <?php 
+                                switch ($category) {
+                                    case 'bots': _e('Roboter/Crawlere', 'bd-product-feed'); break;
+                                    case 'browsers': _e('Nettlesere', 'bd-product-feed'); break;
+                                    case 'feed_readers': _e('Feed-lesere', 'bd-product-feed'); break;
+                                    case 'unknown': _e('Ukjent', 'bd-product-feed'); break;
+                                }
+                                ?>
+                            </div>
+                            <div class="bd-ua-count"><?php echo number_format($count); ?></div>
+                            <div class="bd-ua-percentage">
+                                (<?php echo $total_ua > 0 ? round(($count / $total_ua) * 100, 1) : 0; ?>%)
+                            </div>
+                        </div>
+                        <?php endif; ?>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="bd-settings-section">
+            <h3><?php _e('Feed-generering statistikk', 'bd-product-feed'); ?></h3>
+            
+            <div class="bd-generation-stats">
+                <div class="bd-stat-item">
+                    <strong><?php _e('Gjennomsnittlig produkter per feed:', 'bd-product-feed'); ?></strong>
+                    <?php echo number_format($analytics_data['generation_stats']['avg_products']); ?>
+                </div>
+                <div class="bd-stat-item">
+                    <strong><?php _e('Gjennomsnittlig genereringstid:', 'bd-product-feed'); ?></strong>
+                    <?php echo $analytics_data['generation_stats']['avg_generation_time']; ?> sekunder
+                </div>
+                <div class="bd-stat-item">
+                    <strong><?php _e('Gjennomsnittlig filstørrelse:', 'bd-product-feed'); ?></strong>
+                    <?php echo size_format($analytics_data['generation_stats']['avg_file_size']); ?>
+                </div>
+            </div>
+            
+            <?php if (!empty($analytics_data['generation_stats']['recent_generations'])): ?>
+            <h4><?php _e('Siste genereringer', 'bd-product-feed'); ?></h4>
+            <table class="wp-list-table widefat fixed striped">
+                <thead>
+                    <tr>
+                        <th><?php _e('Tidspunkt', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Status', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Produkter', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Tid', 'bd-product-feed'); ?></th>
+                        <th><?php _e('Størrelse', 'bd-product-feed'); ?></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($analytics_data['generation_stats']['recent_generations'] as $generation): ?>
+                    <tr>
+                        <td><?php echo esc_html($generation['timestamp']); ?></td>
+                        <td>
+                            <span class="bd-label <?php echo $generation['success'] ? 'success' : 'error'; ?>">
+                                <?php echo $generation['success'] ? __('Vellykket', 'bd-product-feed') : __('Feilet', 'bd-product-feed'); ?>
+                            </span>
+                        </td>
+                        <td><?php echo $generation['success'] ? number_format($generation['product_count']) : '-'; ?></td>
+                        <td><?php echo $generation['success'] ? $generation['generation_time'] . 's' : '-'; ?></td>
+                        <td><?php echo $generation['success'] ? size_format($generation['file_size']) : '-'; ?></td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+            <?php endif; ?>
+        </div>
+        
+        <style>
+        .bd-analytics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        
+        .bd-metric-card {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 20px;
+            text-align: center;
+        }
+        
+        .bd-metric-card h4 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #666;
+        }
+        
+        .bd-metric-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #0073aa;
+            margin-bottom: 5px;
+        }
+        
+        .bd-metric-label {
+            font-size: 12px;
+            color: #999;
+        }
+        
+        .bd-chart-section {
+            margin: 30px 0;
+        }
+        
+        .bd-chart-container {
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 20px;
+        }
+        
+        .bd-ua-category {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .bd-ua-category:last-child {
+            border-bottom: none;
+        }
+        
+        .bd-generation-stats .bd-stat-item {
+            margin-bottom: 10px;
+        }
+        </style>
+        
+        <script>
+        // Simple chart implementation using HTML5 Canvas
+        jQuery(document).ready(function($) {
+            // Daily chart
+            <?php if (!empty($analytics_data['access_stats']['daily_stats'])): ?>
+            var dailyCanvas = document.getElementById('bd-daily-chart');
+            if (dailyCanvas) {
+                var ctx = dailyCanvas.getContext('2d');
+                var dailyData = <?php echo wp_json_encode(array_reverse($analytics_data['access_stats']['daily_stats'])); ?>;
+                drawLineChart(ctx, dailyData, 'accesses', '<?php _e('Tilganger', 'bd-product-feed'); ?>');
+            }
+            <?php endif; ?>
+            
+            // Hourly chart
+            var hourlyCanvas = document.getElementById('bd-hourly-chart');
+            if (hourlyCanvas) {
+                var ctx = hourlyCanvas.getContext('2d');
+                var hourlyData = <?php echo wp_json_encode($analytics_data['hourly_pattern']); ?>;
+                drawBarChart(ctx, hourlyData, '<?php _e('Tilganger per time', 'bd-product-feed'); ?>');
+            }
+            
+            // Export analytics
+            $('#bd-export-analytics').on('click', function() {
+                window.location.href = '<?php echo admin_url('admin-ajax.php'); ?>?action=bd_export_analytics&period=<?php echo $period; ?>&nonce=<?php echo wp_create_nonce('bd_product_feed_nonce'); ?>';
+            });
+        });
+        
+        function drawLineChart(ctx, data, valueKey, label) {
+            var canvas = ctx.canvas;
+            var width = canvas.width;
+            var height = canvas.height;
+            var padding = 40;
+            
+            ctx.clearRect(0, 0, width, height);
+            
+            if (data.length === 0) return;
+            
+            var maxValue = Math.max(...data.map(d => d[valueKey]));
+            var stepX = (width - 2 * padding) / (data.length - 1);
+            var stepY = (height - 2 * padding) / maxValue;
+            
+            // Draw axes
+            ctx.strokeStyle = '#ddd';
+            ctx.beginPath();
+            ctx.moveTo(padding, padding);
+            ctx.lineTo(padding, height - padding);
+            ctx.lineTo(width - padding, height - padding);
+            ctx.stroke();
+            
+            // Draw line
+            ctx.strokeStyle = '#0073aa';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            
+            data.forEach((point, index) => {
+                var x = padding + index * stepX;
+                var y = height - padding - point[valueKey] * stepY;
+                
+                if (index === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            
+            ctx.stroke();
+            
+            // Draw points
+            ctx.fillStyle = '#0073aa';
+            data.forEach((point, index) => {
+                var x = padding + index * stepX;
+                var y = height - padding - point[valueKey] * stepY;
+                
+                ctx.beginPath();
+                ctx.arc(x, y, 3, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+        
+        function drawBarChart(ctx, data, label) {
+            var canvas = ctx.canvas;
+            var width = canvas.width;
+            var height = canvas.height;
+            var padding = 40;
+            
+            ctx.clearRect(0, 0, width, height);
+            
+            var maxValue = Math.max(...data);
+            var barWidth = (width - 2 * padding) / data.length;
+            var stepY = (height - 2 * padding) / maxValue;
+            
+            // Draw axes
+            ctx.strokeStyle = '#ddd';
+            ctx.beginPath();
+            ctx.moveTo(padding, padding);
+            ctx.lineTo(padding, height - padding);
+            ctx.lineTo(width - padding, height - padding);
+            ctx.stroke();
+            
+            // Draw bars
+            ctx.fillStyle = '#0073aa';
+            data.forEach((value, index) => {
+                var x = padding + index * barWidth;
+                var barHeight = value * stepY;
+                var y = height - padding - barHeight;
+                
+                ctx.fillRect(x + 2, y, barWidth - 4, barHeight);
+            });
+        }
         </script>
         <?php
     }

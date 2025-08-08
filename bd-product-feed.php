@@ -61,6 +61,7 @@ require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-cron-manager.php';
 require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-feed-validator.php';
 require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-multilingual.php';
 require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-settings-manager.php';
+require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-analytics.php';
 require_once BD_PRODUCT_FEED_PATH . 'includes/class-bd-admin-interface.php';
 
 /**
@@ -119,6 +120,11 @@ class BD_Product_Feed {
     public $settings_manager;
     
     /**
+     * Analytics
+     */
+    public $analytics;
+    
+    /**
      * Get plugin instance
      */
     public static function get_instance() {
@@ -148,6 +154,7 @@ class BD_Product_Feed {
         $this->feed_validator = new BD_Feed_Validator();
         $this->multilingual = new BD_Multilingual();
         $this->settings_manager = new BD_Settings_Manager();
+        $this->analytics = new BD_Analytics();
         
         // Initialize admin interface
         if (is_admin()) {
