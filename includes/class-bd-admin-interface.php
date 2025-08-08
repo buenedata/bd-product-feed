@@ -635,7 +635,174 @@ class BD_Admin_Interface {
                         <td><?php echo wc_price($product['price']); ?></td>
                         <td>
                             <span class="bd-label <?php echo $product['stock_status'] === 'instock' ? 'success' : 'warning'; ?>">
-                                <?php 
+                                <?php
                                 switch ($product['stock_status']) {
                                     case 'instock':
-                                        _
+                                        _e('På lager', 'bd-product-feed');
+                                        break;
+                                    case 'outofstock':
+                                        _e('Ikke på lager', 'bd-product-feed');
+                                        break;
+                                    case 'onbackorder':
+                                        _e('Restordre', 'bd-product-feed');
+                                        break;
+                                    default:
+                                        echo esc_html($product['stock_status']);
+                                }
+                                ?>
+                            </span>
+                        </td>
+                        <td>
+                            <?php
+                            if (!empty($product['categories'])) {
+                                echo esc_html(implode(', ', $product['categories']));
+                            } else {
+                                _e('Ingen kategorier', 'bd-product-feed');
+                            }
+                            ?>
+                        </td>
+                    </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+            <?php else: ?>
+            <p><?php _e('Ingen produkter funnet med gjeldende filtre.', 'bd-product-feed'); ?></p>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+    
+    /**
+     * Display validation tab
+     */
+    private function display_validation_tab() {
+        $feed_stats = $this->core->get_feed_stats();
+        
+        ?>
+        <div class="bd-settings-section">
+            <h3><?php _e('Feed Validering', 'bd-product-feed'); ?></h3>
+            
+            <?php if ($feed_stats['exists']): ?>
+            <div class="bd-validation-controls">
+                <button type="button" class="button button-primary" id="bd-validate-feed-detailed">
+                    <?php _e('Valider Feed', 'bd-product-feed'); ?>
+                </button>
+                <button type="button" class="button button-secondary" id="bd-check-feed-structure">
+                    <?php _e('Sjekk XML Struktur', 'bd-product-feed'); ?>
+                </button>
+                <button type="button" class="button button-secondary" id="bd-test-google-merchant">
+                    <?php _e('Test Google Merchant Center', 'bd-product-feed'); ?>
+                </button>
+            </div>
+            
+            <div id="bd-validation-results" class="bd-validation-results" style="display: none;">
+                <!-- Results will be populated via AJAX -->
+            </div>
+            
+            <div class="bd-info-box">
+                <h4><?php _e('Validering inkluderer:', 'bd-product-feed'); ?></h4>
+                <ul>
+                    <li><?php _e('XML syntaks og struktur', 'bd-product-feed'); ?></li>
+                    <li><?php _e('Google Merchant Center krav', 'bd-product-feed'); ?></li>
+                    <li><?php _e('Påkrevde produktfelt', 'bd-product-feed'); ?></li>
+                    <li><?php _e('Bildekvalitet og tilgjengelighet', 'bd-product-feed'); ?></li>
+                    <li><?php _e('Priser og valutaformat', 'bd-product-feed'); ?></li>
+                </ul>
+            </div>
+            
+            <?php else: ?>
+            <div class="bd-warning-box">
+                <p><?php _e('Ingen feed funnet. Generer en feed først for å kunne validere den.', 'bd-product-feed'); ?></p>
+                <form method="post" style="margin-top: 10px;">
+                    <?php wp_nonce_field('bd_product_feed_generate', 'bd_nonce'); ?>
+                    <input type="submit" name="bd_generate_feed" class="button button-primary"
+                           value="<?php _e('Generer Feed Nå', 'bd-product-feed'); ?>">
+                </form>
+            </div>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+    
+    /**
+     * Display logs tab
+     */
+    private function display_logs_tab() {
+        $logs = $this->core->get_recent_logs(50);
+        
+        ?>
+        <div class="bd-settings-section">
+            <h3><?php _e('Systemlogger', 'bd-product-feed'); ?></h3>
+            
+            <div class="bd-log-controls">
+                <button type="button" class="button button-secondary" id="bd-clear-logs">
+                    <?php _e('Tøm logger', 'bd-product-feed'); ?>
+                </button>
+                <button type="button" class="button button-secondary" id="bd-download-logs">
+                    <?php _e('Last ned logger', 'bd-product-feed'); ?>
+                </button>
+                <button type="button" class="button button-secondary" id="bd-refresh-logs">
+                    <?php _e('Oppdater', 'bd-product-feed'); ?>
+                </button>
+            </div>
+            
+            <?php if (!empty($logs)): ?>
+            <div class="bd-log-container">
+                <table class="wp-list-table widefat fixed striped">
+                    <thead>
+                        <tr>
+                            <th style="width: 150px;"><?php _e('Tidspunkt', 'bd-product-feed'); ?></th>
+                            <th style="width: 80px;"><?php _e('Nivå', 'bd-product-feed'); ?></th>
+                            <th><?php _e('Melding', 'bd-product-feed'); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($logs as $log): ?>
+                        <tr class="bd-log-entry bd-log-<?php echo esc_attr($log['level']); ?>">
+                            <td><?php echo esc_html(date('Y-m-d H:i:s', $log['timestamp'])); ?></td>
+                            <td>
+                                <span class="bd-label <?php echo $this->get_log_level_class($log['level']); ?>">
+                                    <?php echo esc_html(strtoupper($log['level'])); ?>
+                                </span>
+                            </td>
+                            <td>
+                                <?php echo esc_html($log['message']); ?>
+                                <?php if (!empty($log['context'])): ?>
+                                <details style="margin-top: 5px;">
+                                    <summary style="cursor: pointer; color: #666;"><?php _e('Detaljer', 'bd-product-feed'); ?></summary>
+                                    <pre style="background: #f9f9f9; padding: 10px; margin-top: 5px; font-size: 11px; overflow-x: auto;"><?php echo esc_html(print_r($log['context'], true)); ?></pre>
+                                </details>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <?php else: ?>
+            <div class="bd-info-box">
+                <p><?php _e('Ingen logger funnet.', 'bd-product-feed'); ?></p>
+            </div>
+            <?php endif; ?>
+        </div>
+        <?php
+    }
+    
+    /**
+     * Get CSS class for log level
+     */
+    private function get_log_level_class($level) {
+        switch (strtolower($level)) {
+            case 'error':
+                return 'error';
+            case 'warning':
+                return 'warning';
+            case 'info':
+                return 'info';
+            case 'success':
+                return 'success';
+            default:
+                return 'default';
+        }
+    }
+}
