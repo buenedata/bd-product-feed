@@ -29,8 +29,21 @@ class BD_Currency_Converter {
      * Constructor
      */
     public function __construct() {
-        $this->base_currency = get_woocommerce_currency();
+        $this->base_currency = $this->get_base_currency();
         $this->load_api_settings();
+    }
+    
+    /**
+     * Get base currency from WooCommerce
+     */
+    private function get_base_currency() {
+        // Check if WooCommerce function exists
+        if (function_exists('get_woocommerce_currency')) {
+            return get_woocommerce_currency();
+        }
+        
+        // Fallback to WooCommerce option
+        return get_option('woocommerce_currency', 'NOK');
     }
     
     /**

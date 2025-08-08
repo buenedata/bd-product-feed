@@ -2,7 +2,7 @@
 /*
 Plugin Name: BD Product Feed
 Description: Genererer raskt og enkelt en produktfeed som er kompatibel med tjenester som prisjakt.no og Google Merchant Center. Gjør produktene dine synlige i prisportaler for økt synlighet og salg.
-Version: 1.0.1
+Version: 1.0.2
 Author: Buene Data
 Author URI: https://buenedata.no
 Plugin URI: https://github.com/buenedata/bd-product-feed
@@ -21,7 +21,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Plugin constants
-define('BD_PRODUCT_FEED_VERSION', '1.0.1');
+define('BD_PRODUCT_FEED_VERSION', '1.0.2');
 define('BD_PRODUCT_FEED_FILE', __FILE__);
 define('BD_PRODUCT_FEED_PATH', plugin_dir_path(__FILE__));
 define('BD_PRODUCT_FEED_URL', plugin_dir_url(__FILE__));
